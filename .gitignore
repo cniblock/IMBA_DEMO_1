@@ -24,5 +24,4 @@ env/
 .DS_Store
 Thumbs.db
 
-# Parquet cache (generated from CSV; speeds up app load)
-parquet_cache/
+# Parquet cache is committed for Streamlit Cloud deploy (no build step)
