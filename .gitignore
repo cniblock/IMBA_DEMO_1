@@ -23,3 +23,6 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# Parquet cache (generated from CSV; speeds up app load)
+parquet_cache/

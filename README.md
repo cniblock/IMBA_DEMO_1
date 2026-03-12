@@ -13,6 +13,16 @@ streamlit run app.py
 
 STATS19 data is included in the repo under `datasets/` (UK Gov open data). The app works out of the box after cloning.
 
+### Faster loading (optional)
+
+Run once to convert CSV to Parquet and prebuild views:
+
+```bash
+python scripts/prepare_data.py
+```
+
+Subsequent app starts will load from Parquet (3–10× faster) and skip view computation.
+
 ## Pages
 
 - Executive Overview — metrics, charts, operational alerts

@@ -1,5 +1,6 @@
 """Data transforms, feature engineering, and view building for the STATS19 Intelligence Platform."""
 
+from pathlib import Path
 from typing import Dict, List, Tuple
 
 import numpy as np
@@ -9,12 +10,16 @@ import streamlit as st
 from config import CODE_MAPS
 from data_loading import (
     add_district_labels,
+    data_cache_fingerprint as _data_cache_fingerprint,
     find_dataset_dir,
+    get_parquet_cache_dir,
     load_raw_tables,
     resolve_district_display,
 )
 
 # Columns required for core app functionality; missing these causes st.stop()
+
+
 REQUIRED_COLLISION_VIEW_COLUMNS = [
     "collision_index",
     "date",
@@ -36,6 +41,41 @@ OPTIONAL_COLLISION_LABELS = [
     "junction_detail_label",
     "first_road_class_label",
 ]
+
+
+def _prebuilt_is_fresh(path, dataset_dir) -> bool:
+    """True if prebuilt parquet exists and is newer than source CSVs."""
+    from pathlib import Path
+    p = Path(path) if not hasattr(path, "exists") else path
+    if not p.exists():
+        return False
+    prebuilt_mtime = p.stat().st_mtime_ns
+    sources = [
+        "dft-road-casualty-statistics-collision-last-5-years.csv",
+        "dft-road-casualty-statistics-collision-provisional-2025.csv",
+        "dft-road-casualty-statistics-vehicle-last-5-years.csv",
+        "dft-road-casualty-statistics-vehicle-provisional-2025.csv",
+        "dft-road-casualty-statistics-casualty-last-5-years.csv",
+        "dft-road-casualty-statistics-casualty-provisional-2025.csv",
+    ]
+    for f in sources:
+        src = dataset_dir / f
+        if src.exists() and src.stat().st_mtime_ns > prebuilt_mtime:
+            return False
+    return True
+
+
+def _try_load_prebuilt_view(name: str, cache_fingerprint: tuple) -> pd.DataFrame | None:
+    """Load prebuilt Parquet view if it exists and is fresh. Returns None to fall back to build."""
+    _ = cache_fingerprint
+    cache_dir = get_parquet_cache_dir()
+    path = cache_dir / f"{name}.parquet"
+    if not path.exists() or not _prebuilt_is_fresh(path, find_dataset_dir()):
+        return None
+    try:
+        return pd.read_parquet(path)
+    except Exception:
+        return None
 
 
 def validate_schema(df, required: List[str], name: str = "DataFrame") -> List[str]:
@@ -361,9 +401,20 @@ def _build_cas_agg(casualties: pd.DataFrame) -> pd.DataFrame:
     return cas_tmp.groupby("collision_index", dropna=False).agg(**cas_agg_spec).reset_index()
 
 
+def _prebuilt_view_path(name: str) -> Path | None:
+    """Path to prebuilt Parquet view if it exists and is usable."""
+    from pathlib import Path
+    cache_dir = get_parquet_cache_dir()
+    path = cache_dir / f"{name}.parquet"
+    return path if path.exists() else None
+
+
 @st.cache_data(show_spinner=True)
 def build_collision_view(cache_fingerprint: tuple) -> pd.DataFrame:
     """Build collision-level view (needed for filters and several pages)."""
+    prebuilt = _try_load_prebuilt_view("collision_view", cache_fingerprint)
+    if prebuilt is not None:
+        return prebuilt
     collisions, vehicles, casualties = load_raw_tables(cache_fingerprint)
     veh_agg = _build_veh_agg(vehicles)
     cas_agg = _build_cas_agg(casualties)
@@ -391,6 +442,9 @@ def build_collision_view(cache_fingerprint: tuple) -> pd.DataFrame:
 @st.cache_data(show_spinner=True)
 def build_vehicle_view(cache_fingerprint: tuple) -> pd.DataFrame:
     """Build vehicle-level view (lazy-loaded when Vehicle Intelligence is selected)."""
+    prebuilt = _try_load_prebuilt_view("vehicle_view", cache_fingerprint)
+    if prebuilt is not None:
+        return prebuilt
     collisions, vehicles, casualties = load_raw_tables(cache_fingerprint)
     vehicle_view = collisions.merge(
         vehicles,
@@ -408,6 +462,10 @@ def build_vehicle_view(cache_fingerprint: tuple) -> pd.DataFrame:
 @st.cache_data(show_spinner=True)
 def build_casualty_views(cache_fingerprint: tuple) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Build casualty views (lazy-loaded when Casualty Intelligence is selected)."""
+    cv = _try_load_prebuilt_view("casualty_view", cache_fingerprint)
+    cp = _try_load_prebuilt_view("casualty_person_view", cache_fingerprint)
+    if cv is not None and cp is not None:
+        return cv, cp
     collisions, vehicles, casualties = load_raw_tables(cache_fingerprint)
 
     casualty_person_view = collisions.merge(
