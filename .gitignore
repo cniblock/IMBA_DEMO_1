@@ -24,6 +24,5 @@ env/
 .DS_Store
 Thumbs.db
 
-# Large STATS19 datasets (download from data.gov.uk - see README)
-datasets/*.csv
-datasets/*.xlsx
+# Datasets folder (not in repo; create locally and add STATS19 CSVs - see README)
+datasets/

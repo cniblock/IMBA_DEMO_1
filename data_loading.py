@@ -13,7 +13,11 @@ def find_dataset_dir() -> Path:
     for candidate in DATASET_CANDIDATES:
         if candidate.exists() and candidate.is_dir():
             return candidate
-    raise FileNotFoundError("Could not find `dataset` or `datasets` directory in workspace.")
+    # Create datasets/ if missing (folder not in repo; user adds data locally)
+    base = Path(__file__).resolve().parent
+    datasets = base / "datasets"
+    datasets.mkdir(parents=True, exist_ok=True)
+    return datasets
 
 
 def data_cache_fingerprint() -> tuple:
