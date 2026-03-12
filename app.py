@@ -408,36 +408,41 @@ def page_executive_overview(
 
 def page_georisk_map(collision_view: pd.DataFrame) -> None:
     st.title("GeoRisk Map")
+    collision_view = _ensure_label_columns(
+        collision_view,
+        ["collision_severity", "light_conditions", "weather_conditions"],
+    )
+    if "latitude" not in collision_view.columns or "longitude" not in collision_view.columns:
+        st.warning("Geocoding (latitude/longitude) is not available for this dataset.")
+        return
     geo = collision_view.dropna(subset=["latitude", "longitude"]).copy()
+    sev_col = "collision_severity_label" if "collision_severity_label" in geo.columns else "collision_severity"
+    severity_opts = sorted(geo[sev_col].dropna().astype(str).unique().tolist())
     severity_filter = st.multiselect(
         "Severity",
-        options=sorted(geo["collision_severity_label"].dropna().unique().tolist()),
-        default=sorted(geo["collision_severity_label"].dropna().unique().tolist()),
+        options=severity_opts,
+        default=severity_opts,
     )
     if severity_filter:
-        geo = geo[geo["collision_severity_label"].isin(severity_filter)]
+        geo = geo[geo[sev_col].astype(str).isin(severity_filter)]
 
     if geo.empty:
         st.warning("No geocoded collisions available for current filters.")
         return
 
+    sample_size = min(5000, len(geo))
+    hover_cols = [c for c in ["collision_index", "date", "speed_limit", "light_conditions_label", "weather_conditions_label"] if c in geo.columns]
     map_fig = px.scatter_mapbox(
-        geo.sample(min(20000, len(geo)), random_state=42),
+        geo.sample(n=sample_size, random_state=42),
         lat="latitude",
         lon="longitude",
-        color="collision_severity_label",
+        color=sev_col,
         zoom=5,
         height=620,
-        hover_data=[
-            "collision_index",
-            "date",
-            "speed_limit",
-            "light_conditions_label",
-            "weather_conditions_label",
-        ],
+        hover_data=hover_cols if hover_cols else None,
         title="Collision hotspots (sampled for performance)",
         labels={
-            "collision_severity_label": "Collision Severity",
+            sev_col: "Collision Severity",
             "latitude": "Latitude",
             "longitude": "Longitude",
             "collision_index": "Collision Index",
@@ -456,18 +461,20 @@ def page_georisk_map(collision_view: pd.DataFrame) -> None:
             font_size=12,
         ),
     )
-    map_fig.update_traces(
-        hovertemplate=(
-            "<b>Collision Severity</b> = %{fullData.name}<br>"
-            "Latitude = %{lat}<br>"
-            "Longitude = %{lon}<br>"
-            "Collision Index = %{customdata[0]}<br>"
-            "Date = %{customdata[1]|%Y-%m-%d}<br>"
-            "Speed Limit (mph) = %{customdata[2]}<br>"
-            "Light Conditions = %{customdata[3]}<br>"
-            "Weather Conditions = %{customdata[4]}<extra></extra>"
+    # Only set custom hovertemplate when we have all 5 hover columns to avoid index errors
+    if len(hover_cols) >= 5:
+        map_fig.update_traces(
+            hovertemplate=(
+                "<b>Collision Severity</b> = %{fullData.name}<br>"
+                "Latitude = %{lat}<br>"
+                "Longitude = %{lon}<br>"
+                "Collision Index = %{customdata[0]}<br>"
+                "Date = %{customdata[1]}<br>"
+                "Speed Limit (mph) = %{customdata[2]}<br>"
+                "Light Conditions = %{customdata[3]}<br>"
+                "Weather Conditions = %{customdata[4]}<extra></extra>"
+            )
         )
-    )
     st.plotly_chart(map_fig, use_container_width=True)
 
     st.subheader("Top 10 Risk Districts")
@@ -2193,6 +2200,15 @@ def main() -> None:
             "(collision_index, casualty_reference, casualty_severity, casualty_class, casualty_type, age_of_casualty)."
         )
         st.stop()
+    except (MemoryError, OSError) as e:
+        st.error(
+            "Data loading failed (out of memory or system limit). On Streamlit Cloud free tier, try: "
+            "1) Add **Build command**: `python scripts/prepare_data.py` in app settings, 2) Redeploy."
+        )
+        st.stop()
+    except Exception as e:
+        st.error(f"Data loading failed: {type(e).__name__}: {e}")
+        st.stop()
 
     missing_collision = _validate_schema(collision_view, REQUIRED_COLLISION_VIEW_COLUMNS)
     if missing_collision:
@@ -2229,18 +2245,25 @@ def main() -> None:
         label_visibility="collapsed",
     )
 
+    def safe_page(name: str, fn, *args, **kwargs):
+        try:
+            fn(*args, **kwargs)
+        except Exception as e:
+            st.error(f"**{name}** could not load: {e}")
+            st.exception(e)
+
     if page == "Executive Overview":
-        page_executive_overview(filtered_collision, operational_stats)
+        safe_page("Executive Overview", page_executive_overview, filtered_collision, operational_stats)
     elif page == "GeoRisk Map":
-        page_georisk_map(filtered_collision)
+        safe_page("GeoRisk Map", page_georisk_map, filtered_collision)
     elif page == "Risk Factors":
-        page_risk_factors(filtered_collision)
+        safe_page("Risk Factors", page_risk_factors, filtered_collision)
     elif page == "Vehicle Intelligence":
         vehicle_view = build_vehicle_view(cache_fingerprint)
         filtered_vehicle = vehicle_view[
             vehicle_view["collision_index"].isin(filtered_collision["collision_index"])
         ]
-        page_vehicle_intelligence(filtered_vehicle)
+        safe_page("Vehicle Intelligence", page_vehicle_intelligence, filtered_vehicle)
     elif page == "Casualty Intelligence":
         casualty_view, casualty_person_view = build_casualty_views(cache_fingerprint)
         filtered_casualty_linked = casualty_view[
@@ -2249,9 +2272,9 @@ def main() -> None:
         filtered_casualty_person = casualty_person_view[
             casualty_person_view["collision_index"].isin(filtered_collision["collision_index"])
         ]
-        page_casualty_intelligence(filtered_casualty_person, filtered_casualty_linked)
+        safe_page("Casualty Intelligence", page_casualty_intelligence, filtered_casualty_person, filtered_casualty_linked)
     elif page == "Data Quality & Refresh Status":
-        page_pipeline_health(collisions_raw, vehicles_raw, casualties_raw, collision_view)
+        safe_page("Data Quality & Refresh Status", page_pipeline_health, collisions_raw, vehicles_raw, casualties_raw, collision_view)
 
 
 if __name__ == "__main__":
