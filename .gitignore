@@ -23,6 +23,3 @@ env/
 # OS
 .DS_Store
 Thumbs.db
-
-# Datasets folder (not in repo; create locally and add STATS19 CSVs - see README)
-datasets/
